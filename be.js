@@ -14,15 +14,14 @@ const pendingRequests = [];
 router.post('/add', async (req, res) => {
   try {
     const { nama, dateStart, dateEnd, deskripsi } = req.body;
-
     const inventoryItem = await prisma.inventory.findFirst({
       where: { nama: nama, status: true },
     });
 
     if (inventoryItem && inventoryItem.status) {
       pendingRequests.push({
-        idPeminjaman: uuidv4,
         inventoryId: inventoryItem.id,
+        idPeminjaman: uuidv4(), 
         nama,
         dateStart,
         dateEnd,
@@ -30,7 +29,9 @@ router.post('/add', async (req, res) => {
         status: 'Menunggu',
       });
 
-      res.json({ msg: 'Request submitted.' });
+      res.json({ 
+        msg: 'Request submitted.', 
+        data:  pendingRequests });
     } else {
       res.status(404).json({ err: 'Inventory item not found or not available for borrowing.' });
     }
@@ -39,46 +40,18 @@ router.post('/add', async (req, res) => {
   }
 });
 
-// Route for customer to check the status of their request
-router.get('/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    // Check if the request exists in the accepted requests
-    const acceptedRequest = await prisma.peminjaman.findFirst({
-      where: { id: parseInt(id), status: 'Disetujui' },
-    });
-
-    if (acceptedRequest) {
-      res.json({ status: 'Disetujui', msg: 'Your request has been accepted.' });
-    } else {
-      // Check if the request exists in the pending requests
-      const pendingRequest = pendingRequests.find((request) => request.inventoryId === parseInt(id));
-
-      if (pendingRequest) {
-        res.json({ status: 'Menunggu', msg: 'Your request is still pending approval.' });
-      } else {
-        // Check if the request exists in the rejected requests
-        const rejectedRequest = await prisma.peminjaman.findFirst({
-          where: { id: parseInt(id), status: 'Ditolak' },
-        });
-
-        if (rejectedRequest) {
-          res.json({ status: 'Ditolak', msg: 'Your request has been rejected.' });
-        } else {
-          res.status(404).json({ error: 'Request not found.' });
-        }
-      }
-    }
-  } catch (error) {
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
-});
-
 // Route for admin to view the list of pending requests
-router.get('/validasi', (req, res) => {
+router.get('/pending-request', (req, res) => {
   try {
-    res.json(pendingRequests);
+    const pendingRequestsAdmin = pendingRequests.map(({ idPeminjaman, nama, dateStart, dateEnd, deskripsi, status }) => ({
+      idPeminjaman,
+      nama,
+      dateStart,
+      dateEnd,
+      deskripsi,
+      status,
+    }))
+    res.json(pendingRequestsAdmin);
   } catch (error) {
     res.status(500).json({ error: 'Internal Server Error' });
   }
@@ -102,8 +75,8 @@ router.delete('/:id', async (req, res) => {
   }
 })
 
-// Route for admin to accept or reject a request
-router.patch('/validasi/:id', async (req, res) => {
+// Route for admin to accept or reject a request use inventoryId
+router.patch('/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const { action } = req.body;
@@ -155,21 +128,33 @@ router.patch('/validasi/:id', async (req, res) => {
   }
 });
 
-// route for customer to view their accepted request or borrowed inventory
-router.get('/current', async (req, res) => {
+// route to view requests (Menunggu, Disetujui, Ditolak)
+router.get('/', async (req, res) => {
   try {
-    const currentRequest = await prisma.peminjaman.findMany({
-      where: { status: 'Disetujui' },
-    });
+    // Retrieve pending requests (Menunggu) from the array
+    const pendingRequestsMapped = pendingRequests.map(({ idPeminjaman, nama, dateStart, dateEnd, deskripsi, status }) => ({
+      idPeminjaman,
+      nama,
+      dateStart,
+      dateEnd,
+      deskripsi,
+      status,
+    }));
 
-    res.json(currentRequest);
+    // Retrieve accepted and rejected requests from the database
+    const allRequests = await prisma.peminjaman.findMany();
+
+    // Combine all requests
+    const combinedRequests = [...pendingRequestsMapped, ...allRequests];
+
+    res.json(combinedRequests);
   } catch (error) {
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
 
 // route for customer to fill in the inventory's condition after borrowing
-router.post('/current/:id', async (req, res) => {
+router.patch('/done/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const { kondisi } = req.body;
@@ -185,6 +170,14 @@ router.post('/current/:id', async (req, res) => {
           inventoryId: peminjamanItem.inventoryId,
           idPeminjaman: peminjamanItem.id,
           kondisi,
+        },
+      });
+
+      // update the inventory status in the inventory table
+      await prisma.inventory.update({
+        where: { id: peminjamanItem.inventoryId },
+        data: {
+          status: true,
         },
       });
 
